@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.coverage
+build/
+dist/
+.venv-build/
+OpenAdder.spec
