@@ -7,8 +7,13 @@ class ReportLayout(unittest.TestCase):
     def test_header_and_crc(self):
         r = p.get_firmware()
         self.assertEqual(len(r), 90)
-        self.assertEqual(r[:8], bytes([0x00, 0x3F, 0, 0, 0, 0x02, 0x00, 0x81]))
+        self.assertEqual(r[:8], bytes([0x00, 0x00, 0, 0, 0, 0x02, 0x00, 0x81]))
         self.assertEqual(r[88], 0x02 ^ 0x00 ^ 0x81)
+
+    def test_transaction_id_is_not_part_of_the_crc(self):
+        r = p.with_transaction_id(p.get_firmware(), 0x1F)
+        self.assertEqual(r[1], 0x1F)
+        self.assertEqual(r[2:], p.get_firmware()[2:])
 
     def test_build_rejects_long_arguments(self):
         with self.assertRaises(ValueError):
@@ -21,7 +26,7 @@ class ReportLayout(unittest.TestCase):
 
     def test_set_dpi_clamps(self):
         r = p.set_dpi(50, 99999)
-        self.assertEqual(r[9:13], bytes([0x00, 0x64, 0x4E, 0x20]))  # 100, 20000
+        self.assertEqual(r[9:13], bytes([0x00, 0x64, 0x75, 0x30]))  # 100, 30000
 
     def test_get_dpi_and_parse(self):
         self.assertEqual(p.get_dpi()[6:9], bytes([0x04, 0x85, 0x00]))
@@ -52,6 +57,14 @@ class ReportLayout(unittest.TestCase):
         self.assertEqual(p.parse_poll_rate(p.parse(bytes([0x02]) + p.set_poll_rate(125)[1:])), 125)
         with self.assertRaises(ValueError):
             p.set_poll_rate(250)
+
+    def test_poll_rate_v2(self):
+        self.assertEqual(p.set_poll_rate_v2(4000, 0x01)[5:10], bytes([0x02, 0x00, 0x40, 0x01, 0x02]))
+        self.assertEqual(p.get_poll_rate_v2()[6:8], bytes([0x00, 0xC0]))
+        resp = p.parse(bytes([0x02]) + p.set_poll_rate_v2(125, 0)[1:])
+        self.assertEqual(p.parse_poll_rate_v2(resp), 125)
+        with self.assertRaises(ValueError):
+            p.set_poll_rate_v2(300, 0)
 
     def test_effects(self):
         static = p.effect_static(p.LOGO_LED, (10, 20, 30))

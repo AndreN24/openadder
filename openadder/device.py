@@ -1,31 +1,33 @@
 """USB transport: talks to the mouse through the standard Windows HID driver."""
 
+import sys
 import threading
 import time
 
 import hid
 
+from . import __version__, models
 from . import protocol as p
 
 VENDOR_ID = 0x1532
-DEATHADDER_V2_PID = 0x0084
 
 
 class DeviceError(Exception):
     pass
 
 
-class DeathAdderV2:
-    def __init__(self, handle):
+class RazerMouse:
+    def __init__(self, handle, model: models.Model = models.DEFAULT):
         self._h = handle
+        self.model = model
         self._lock = threading.Lock()
 
     @classmethod
-    def open(cls) -> "DeathAdderV2":
-        """Find the control interface (interface 0) and check that it answers."""
-        candidates = [d for d in hid.enumerate(VENDOR_ID, DEATHADDER_V2_PID)]
+    def open(cls) -> "RazerMouse":
+        """Find a supported mouse, take its control interface (interface 0) and check that it answers."""
+        candidates = [d for d in hid.enumerate(VENDOR_ID, 0) if d["product_id"] in models.BY_PID]
         if not candidates:
-            raise DeviceError("Razer DeathAdder V2 not found. Is it plugged in?")
+            raise DeviceError("No supported Razer mouse found. Is it plugged in?")
         candidates.sort(key=lambda d: d["interface_number"] != 0)
         for info in candidates:
             h = hid.device()
@@ -33,7 +35,7 @@ class DeathAdderV2:
                 h.open_path(info["path"])
             except OSError:
                 continue
-            dev = cls(h)
+            dev = cls(h, models.BY_PID[info["product_id"]])
             try:
                 if dev._transact(p.get_firmware()).ok:
                     return dev
@@ -45,7 +47,8 @@ class DeathAdderV2:
     def close(self):
         self._h.close()
 
-    def _transact(self, request: bytes, retries: int = 10) -> p.Response:
+    def _transact(self, request: bytes, tid: int = None, retries: int = 10) -> p.Response:
+        request = p.with_transaction_id(request, tid or self.model.tid)
         with self._lock:
             self._h.send_feature_report(b"\x00" + request)
             for _ in range(retries):
@@ -61,12 +64,15 @@ class DeathAdderV2:
             raise DeviceError("The mouse answered a different command.")
         return resp
 
-    def _run(self, request: bytes) -> p.Response:
-        resp = self._transact(request)
+    def _run(self, request: bytes, tid: int = None) -> p.Response:
+        resp = self._transact(request, tid)
         if not resp.ok:
             raise DeviceError(
                 f"Command 0x{request[6]:02x}/0x{request[7]:02x} failed: {resp.status_name}")
         return resp
+
+    def _clamp(self, dpi: int) -> int:
+        return min(int(dpi), self.model.max_dpi)
 
     # --- Read ---------------------------------------------------------------
 
@@ -78,27 +84,38 @@ class DeathAdderV2:
         return p.parse_dpi(self._run(p.get_dpi()))
 
     def dpi_stages(self) -> tuple:
-        return p.parse_dpi_stages(self._run(p.get_dpi_stages()))
+        """(stages, active). Only for models that store stages (model.stages)."""
+        return p.parse_dpi_stages(self._run(p.get_dpi_stages(), self.model.stage_tid))
 
     def poll_rate(self) -> int:
+        if self.model.hyperpolling:
+            return p.parse_poll_rate_v2(self._run(p.get_poll_rate_v2()))
         return p.parse_poll_rate(self._run(p.get_poll_rate()))
 
     def brightness(self, led: int) -> int:
-        return p.parse_brightness(self._run(p.get_brightness(led)))
+        return p.parse_brightness(self._run(p.get_brightness(led), self.model.led_tid))
 
     # --- Write --------------------------------------------------------------
 
     def set_dpi(self, dpi_x: int, dpi_y: int = None):
-        self._run(p.set_dpi(dpi_x, dpi_x if dpi_y is None else dpi_y))
+        x = self._clamp(dpi_x)
+        self._run(p.set_dpi(x, x if dpi_y is None else self._clamp(dpi_y)))
 
     def set_dpi_stages(self, stages, active: int):
-        self._run(p.set_dpi_stages(stages, active))
+        """Does nothing on models without stage memory: OpenAdder keeps their stages."""
+        if self.model.stages:
+            stages = [(self._clamp(x), self._clamp(y)) for x, y in stages]
+            self._run(p.set_dpi_stages(stages, active), self.model.stage_tid)
 
     def set_poll_rate(self, hz: int):
-        self._run(p.set_poll_rate(hz))
+        if self.model.hyperpolling:
+            for argument in (0x00, 0x01):
+                self._run(p.set_poll_rate_v2(hz, argument))
+        else:
+            self._run(p.set_poll_rate(hz))
 
     def set_brightness(self, led: int, value: int):
-        self._run(p.set_brightness(led, value))
+        self._run(p.set_brightness(led, value), self.model.led_tid)
 
     def device_mode(self) -> int:
         return self._run(p.get_device_mode()).args[0]
@@ -116,7 +133,37 @@ class DeathAdderV2:
         }
         if effect not in builders:
             raise ValueError(f"unknown effect {effect!r}")
-        self._run(builders[effect]())
+        self._run(builders[effect](), self.model.led_tid)
+
+
+def diagnostic_report(dev: RazerMouse = None) -> str:
+    """Plain text for a bug report: the Razer devices that Windows sees and what the mouse answers."""
+    win = sys.getwindowsversion()
+    lines = [f"OpenAdder {__version__} on Windows {win.major}.{win.minor}.{win.build}"]
+    interfaces = {}
+    for info in hid.enumerate(VENDOR_ID, 0):
+        interfaces.setdefault(info["product_id"], set()).add(info["interface_number"])
+    seen = [f"1532:{pid:04x} (interfaces {', '.join(map(str, sorted(i)))})"
+            for pid, i in sorted(interfaces.items())]
+    lines.append(f"Razer USB devices: {', '.join(seen) or 'none'}")
+    if dev is None:
+        lines.append("Mouse: not connected")
+        return "\n".join(lines)
+    m = dev.model
+    lines.append(f"Mouse: {m.name} ({m.usb_id}), {'tested' if m.tested else 'not tested yet'}")
+    checks = [("firmware", dev.firmware), ("DPI", dev.dpi), ("polling rate", dev.poll_rate),
+              ("device mode", dev.device_mode)]
+    if m.stages:
+        checks.append(("DPI stages", dev.dpi_stages))
+    for name in m.leds:
+        checks.append((f"{name} brightness", lambda led=p.LEDS[name]: dev.brightness(led)))
+    for name, read in checks:
+        try:
+            value = read()
+        except (DeviceError, OSError, ValueError) as exc:
+            value = f"error: {exc}"
+        lines.append(f"{name}: {value}")
+    return "\n".join(lines)
 
 
 class ButtonListener:
@@ -130,10 +177,10 @@ class ButtonListener:
         self._stop = threading.Event()
         self._threads = []
 
-    def start(self):
+    def start(self, pid: int):
         self.stop()
         self._stop.clear()
-        for info in hid.enumerate(VENDOR_ID, DEATHADDER_V2_PID):
+        for info in hid.enumerate(VENDOR_ID, pid):
             # "report 4" arrives on an interface-1 collection without a usage.
             if info["interface_number"] != 1 or info["usage_page"] != 0x01 or info["usage"] != 0x00:
                 continue

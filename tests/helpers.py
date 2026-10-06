@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from openadder import config
+from openadder import config, models
 
 
 class TempConfig:
@@ -22,9 +22,11 @@ class TempConfig:
 
 
 class FakeMouse:
-    """Behaves like device.DeathAdderV2 and records every call."""
+    """Behaves like device.RazerMouse and records every call."""
 
-    def __init__(self, stages=(400, 800, 1600, 2400, 3200), active=2, poll=1000, brightness=168):
+    def __init__(self, stages=(400, 800, 1600, 2400, 3200), active=2, poll=1000, brightness=168,
+                 model=models.DEFAULT):
+        self.model = model
         self.stages = [(d, d) for d in stages]
         self.active = active
         self.poll = poll
@@ -50,6 +52,7 @@ class FakeMouse:
         return self.bright[led]
 
     def dpi_stages(self):
+        assert self.model.stages, "this model stores no DPI stages"
         return list(self.stages), self.active
 
     def dpi(self):
@@ -63,8 +66,9 @@ class FakeMouse:
         self.mode = mode
 
     def set_dpi_stages(self, stages, active):
-        self._log("set_dpi_stages", list(stages), active)
-        self.stages, self.active = list(stages), active
+        if self.model.stages:
+            self._log("set_dpi_stages", list(stages), active)
+            self.stages, self.active = list(stages), active
 
     def set_dpi(self, x, y=None):
         self._log("set_dpi", x)

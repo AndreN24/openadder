@@ -1,3 +1,3 @@
-"""OpenAdder: open-source settings tool for the Razer DeathAdder V2."""
+"""OpenAdder: open-source settings tool for Razer DeathAdder mice."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

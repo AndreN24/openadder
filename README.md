@@ -1,88 +1,77 @@
 # OpenAdder
 
-**Change the buttons, DPI and lighting of your Razer DeathAdder V2 — without Razer Synapse, without an account, and without an internet connection.**
+**Change the buttons, DPI and lighting of your Razer mouse. No Razer Synapse, no account, no internet.**
 
-OpenAdder is a small, free, open-source program for Windows. It uses about 19 MB of memory and does not run any background services.
+OpenAdder is a small, free program for Windows 10 and 11. It uses about 20 MB of memory.
 
 ![OpenAdder](docs/screenshot.png)
 
-## What it does
+## What you can do
 
-- **Buttons:** give any of the 10 buttons a new job: a key combination, a mouse button, a media key, a DPI change, a profile change, or a program or script to start.
-- **DPI:** set up to 5 speed stages, and the polling rate (125, 500 or 1000 Hz).
-- **Lighting:** colour, effect and brightness of the logo and the scroll wheel.
-- **Profiles:** keep different setups (for example "Games" and "Work") and switch between them.
+- Give any button a new job: a key combination, a mouse button, a media key, a DPI change, a profile change, or a program to start.
+- Set up to 5 DPI stages and the polling rate.
+- Change the colour, effect and brightness of the lights.
+- Keep different setups as profiles, for example "Games" and "Work".
 
-DPI and lighting are saved on the mouse, so they also work on other computers. The button changes work while OpenAdder runs (it sits quietly in the system tray).
+## Download
 
-OpenAdder works with the **Razer DeathAdder V2** (wired) on **Windows 10 and 11**.
+1. Open the [**Releases page**](../../releases/latest).
+2. Download **`OpenAdder-…-Setup.exe`** and open it.
+3. Follow the steps.
 
-## Download and install
+Windows can show **"Windows protected your PC"**. This is normal for new free programs. Click **More info**, then **Run anyway**.
 
-1. Go to the [**Releases page**](../../releases/latest).
-2. Download **`OpenAdder-…-Setup.exe`**.
-3. Open the file and follow the steps.
+No installation: download `OpenAdder-…-portable.zip`, right-click it, choose **Extract All**, and open `OpenAdder.exe`.
 
-> **"Windows protected your PC"?** This message appears for new programs that are not signed with a paid certificate.
-> Click **More info**, then **Run anyway**. OpenAdder is open source: anyone can check the code on this page.
+## How to use it
 
-**Portable version (no installation):** download `OpenAdder-…-portable.zip`, right-click it, choose **Extract All**, and open `OpenAdder.exe` in the extracted folder. Do not start it from inside the zip file.
+1. Close Razer Synapse if you have it.
+2. Start OpenAdder. It finds your mouse by itself.
+3. Click a button in the picture or in the list, and choose a new job.
 
-## First start
+DPI and lighting are saved on the mouse. Button changes work while OpenAdder runs. When you close the window, OpenAdder stays in the tray (next to the clock). Tick **Start with Windows** to start it automatically.
 
-1. **Close Razer Synapse** if it is installed (or uninstall it). Synapse and OpenAdder must not control the mouse at the same time.
-2. Start OpenAdder. At the top right it shows **● Connected** when it finds your mouse.
-3. Point at a part of the mouse picture to see what it does. Click it to change it.
+**Emergency:** if a button change makes the mouse hard to use, press **Ctrl + Alt + Shift + Esc**. All buttons go back to normal.
 
-When you close the window, OpenAdder keeps running in the **system tray** (the small icons next to the clock), so your buttons keep working. Click the tray icon to open the window again. To start OpenAdder automatically, tick **Start with Windows**.
+**Undo everything:** **Manage → Reset everything…**
 
-## Everyday use
+## Supported mice
 
-| To … | Do this |
+| Mouse | Status |
 |---|---|
-| Change a button | Click it in the picture or in the list, then choose a new job from the menu. |
-| Use a key combination | In the button's menu, choose **Record keys…**, press the keys, and click **Save**. |
-| Start a program or script | In the button's menu, choose **Run a program or script…** and pick the file. |
-| Change the speed | **DPI** tab. Changes are saved on the mouse by themselves. |
-| Change the lighting | **Lighting** tab. |
-| Make a second setup | **Manage → New profile**. Switch with the **Profile** list, the tray menu, or a mouse button set to **Next profile**. |
-| Undo everything | **Manage → Reset everything…** |
+| DeathAdder V2 | Tested |
+| DeathAdder V2 Mini, V2 Lite | Not tested yet |
+| DeathAdder V3 (wired) | Not tested yet |
+| DeathAdder Elite | Not tested yet |
+| DeathAdder Essential (all versions) | Not tested yet |
+| Cobra (wired) | Not tested yet |
 
-**Emergency:** if a button change makes the mouse hard to use, press **Ctrl + Alt + Shift + Esc**. All buttons do their normal job again, from anywhere. Clicks inside the OpenAdder window are never changed, so you can always fix things there.
+Wireless mice are not supported yet.
 
-## Questions and problems
+**Do you have a mouse that is "not tested yet"?** Please try it. Then click **Manage → Copy mouse report** and paste the report into a [new issue](../../issues/new/choose). Tell us what works and what does not. The report contains no personal data.
 
-**"Mouse not found"**
-Check that the mouse is plugged in and that Razer Synapse is closed. OpenAdder connects by itself when you plug the mouse in.
+## Questions
 
-**My buttons stopped working after a restart.**
-OpenAdder must run for the button changes. Tick **Start with Windows**.
+**"Mouse not found"**: plug the mouse in and close Razer Synapse. OpenAdder connects by itself.
 
-**A game ignores my button changes.**
-Some games with anti-cheat software block changed input. DPI and lighting still work, because they are saved on the mouse.
+**My buttons stopped working after a restart**: OpenAdder must run for button changes. Tick **Start with Windows**.
 
-**Does OpenAdder change my mouse permanently?**
-Only DPI, polling rate and lighting, the same settings that Synapse saves. Use **Manage → Reset everything…** to go back to the factory settings.
+**A game ignores my button changes**: some anti-cheat software blocks changed input. DPI and lighting still work.
 
-**How do I uninstall it?**
-Windows **Settings → Apps → Installed apps → OpenAdder → Uninstall**. The portable version: delete its folder. Your settings are in `%APPDATA%\OpenAdder` and can be deleted too.
+**Uninstall**: Windows **Settings → Apps → OpenAdder → Uninstall**. Your settings are in `%APPDATA%\OpenAdder`.
 
-**Does it support other Razer mice?**
-Not yet. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) if you want to help.
-
-**Is it safe?**
-OpenAdder only talks to your mouse, through the normal Windows USB driver. It does not connect to the internet and collects no data.
+**Is it safe?** OpenAdder only talks to your mouse. It does not use the internet and collects no data. The code is open: anyone can check it here.
 
 ## For developers
 
-How it works, how to build it, and how to run the tests: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): how it works, how to build it, how to run the tests, and how to add a mouse.
 
 ## Credits and license
 
-- [OpenRazer](https://github.com/openrazer/openrazer) (GPL-2.0): mouse protocol and driver-mode knowledge.
-- [gpoulios/deathadderv2](https://github.com/gpoulios/deathadderv2) (GPL-3.0): DPI stage format tested on this mouse.
-- [Snakecharmer](https://github.com/asavs/snakecharmer) (GPL-2.0-or-later): outline of the mouse picture.
+- [OpenRazer](https://github.com/openrazer/openrazer): mouse protocol and model data.
+- [gpoulios/deathadderv2](https://github.com/gpoulios/deathadderv2): DPI stage format.
+- [Snakecharmer](https://github.com/asavs/snakecharmer): outline of the mouse picture.
 
-OpenAdder is licensed under the **GNU General Public License v2.0 or later**. See [LICENSE](LICENSE).
+License: **GNU General Public License v2.0 or later** ([LICENSE](LICENSE)).
 
-OpenAdder is not affiliated with Razer Inc. "Razer" and "DeathAdder" are trademarks of Razer Inc.
+OpenAdder is not made by or connected to Razer Inc. "Razer", "DeathAdder" and "Cobra" are trademarks of Razer Inc.

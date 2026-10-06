@@ -14,7 +14,7 @@ text = f"""VSVersionInfo(
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', 'OpenAdder contributors'),
-      StringStruct('FileDescription', 'OpenAdder - settings for the Razer DeathAdder V2'),
+      StringStruct('FileDescription', 'OpenAdder - settings for Razer DeathAdder mice'),
       StringStruct('FileVersion', '{__version__}'),
       StringStruct('InternalName', 'OpenAdder'),
       StringStruct('LegalCopyright', 'GPL-2.0-or-later'),

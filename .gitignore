@@ -5,3 +5,4 @@ build/
 dist/
 .venv-build/
 OpenAdder.spec
+.pytest_cache/

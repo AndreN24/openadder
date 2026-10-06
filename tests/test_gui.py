@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest import mock
 
-from openadder import config, gui
+from openadder import config, gui, models
 from openadder import protocol as p
 from openadder.dialogs import NameDialog, RecordKeysDialog
 
@@ -19,15 +19,16 @@ REAL_START_TRAY = gui.App._start_tray
 
 class _App(unittest.TestCase):
     real_start_tray = staticmethod(REAL_START_TRAY)
+    model = models.DEFAULT
 
     def setUp(self):
         self.tmp = TempConfig().start()
         self.addCleanup(self.tmp.stop)
-        self.mouse = FakeMouse()
+        self.mouse = FakeMouse(model=self.model)
         self.listener = mock.Mock()
         self.yes = True
         patches = [
-            mock.patch.object(gui.DeathAdderV2, "open", side_effect=lambda: self.mouse),
+            mock.patch.object(gui.RazerMouse, "open", side_effect=lambda: self.mouse),
             mock.patch.object(gui, "ButtonListener", return_value=self.listener),
             mock.patch.object(gui.Remapper, "_start_hook"),
             mock.patch.object(gui.Remapper, "_stop_hook"),
@@ -112,7 +113,7 @@ class Buttons(_App):
     def test_dpi_buttons_turn_driver_mode_on_and_off(self):
         self.app.set_action("dpi_up", "profile:next")
         self.pump(lambda: self.mouse.mode == p.DRIVER_MODE)
-        self.listener.start.assert_called_once()
+        self.listener.start.assert_called_once_with(0x0084)
         self.app.set_action("dpi_up", "default")
         self.pump(lambda: self.mouse.mode == p.NORMAL_MODE)
         self.listener.stop.assert_called()
@@ -259,9 +260,10 @@ class Reset(_App):
         self.assertIn("Other", self.app.cfg["profiles"])
         self.yes = True
         self.app.reset_everything()
-        self.assertEqual(self.app.cfg, config.factory_settings())
+        factory = {**config.factory_settings(), "last_mouse": 0x0084}  # the mouse stays known
+        self.assertEqual(self.app.cfg, factory)
         config.set_autostart.assert_called_with(False)
-        self.assertEqual(config.load(), config.factory_settings())
+        self.assertEqual(config.load(), factory)
         self.assertEqual(self.app.action_buttons["rear"].cget("text"), "Default (back)")
 
 
@@ -281,6 +283,95 @@ class Window(_App):
             self.app.quit()
         self.assertEqual(self.mouse.mode, p.NORMAL_MODE)
         self.assertTrue(self.mouse.closed)
+
+
+class OtherModels(_App):
+    model = models.BY_PID[0x008C]  # DeathAdder V2 Mini: logo only, no DPI or profile buttons
+
+    def test_window_is_built_for_the_connected_model(self):
+        self.assertEqual(self.app.model, self.model)
+        self.assertEqual(config.load()["last_mouse"], 0x008C)
+        self.assertNotIn("dpi_up", self.app.action_buttons)
+        self.assertIn("rear", self.app.action_buttons)
+        self.assertEqual(list(self.app.zone_vars), ["logo"])
+        self.assertIn("not tested yet", self.app.conn_label.cget("text"))
+        self.app.show()
+        self.assertIsNone(self.app.view.hit(*gui.design_to_px(228, 155)))  # no DPI buttons
+
+    def test_only_its_leds_are_set(self):
+        self.app.apply_lighting()
+        self.pump(lambda: "set_brightness" in self.mouse.names())
+        self.assertEqual({c[1][0] for c in self.mouse.calls if c[0] == "set_effect"}, {p.LOGO_LED})
+
+    def test_dpi_is_limited_to_the_model(self):
+        self.app.stage_dpi[0].set(9000)
+        with self.assertRaisesRegex(ValueError, "100 to 8500"):
+            self.app.read_dpi_form()
+
+
+class NoStageMemory(_App):
+    model = models.BY_PID[0x005C]  # DeathAdder Elite
+
+    def test_openadder_keeps_the_stages(self):
+        self.assertEqual(self.app.prof["dpi"], config.default_profile()["dpi"])
+        self.app._handle_dpi_action("up", True)
+        self.assertEqual(self.mouse.dpi_now, (1600, 1600))
+        self.idle()
+        self.assertEqual(self.app.prof["dpi"]["active"], 3)
+        self.app.set_action("dpi_down", "keys:a")
+        self.pump(lambda: self.mouse.mode == p.DRIVER_MODE)
+        self.listener.start.assert_called_once_with(0x005C)
+
+    def test_edit_sets_the_active_stage(self):
+        self.app.stage_dpi[1].set(1000)
+        self.pump(lambda: "set_dpi" in self.mouse.names(), seconds=2)
+        self.assertEqual(self.mouse.dpi_now, (1000, 1000))
+        self.assertNotIn("set_dpi_stages", self.mouse.names())
+
+
+class Hyperpolling(_App):
+    model = models.BY_PID[0x00B2]  # DeathAdder V3: no lighting, up to 8000 Hz
+
+    def test_no_lighting_tab_and_more_polling_rates(self):
+        self.assertEqual(len(self.app.tabs.tabs()), 2)
+        self.app.poll_var.set("8000")
+        self.pump(lambda: "set_poll_rate" in self.mouse.names(), seconds=2)
+        self.assertEqual(self.mouse.poll, 8000)
+
+    def test_profile_polling_rate_that_the_mouse_cannot_do(self):
+        self.app.prof["poll"] = 250
+        self.app._load_profile_into_ui()
+        self.assertEqual(self.app.poll_var.get(), "1000")
+
+
+class SimpleLighting(_App):
+    model = models.BY_PID[0x006E]  # DeathAdder Essential: static, breathing, off
+
+    def test_effect_the_mouse_cannot_do_shows_static(self):
+        self.assertEqual(self.app.prof["lighting"]["logo"]["effect"], "spectrum")
+        self.assertEqual(self.app.zone_vars["logo"]["effect"].get(), "static")
+
+
+class NoPicture(_App):
+    model = models.BY_PID[0x00A3]  # Cobra
+
+    def test_list_only(self):
+        self.app.show()
+        self.assertIsNone(self.app.view)
+        self.app.set_action("rear", "keys:a")
+        self.assertEqual(self.app.action_buttons["rear"].cget("text"), "A")
+
+
+class Report(_App):
+    def test_copy_report(self):
+        root = self.app.root
+        report = mock.patch.object(gui, "diagnostic_report", return_value="report text")
+        clear = mock.patch.object(root, "clipboard_clear")  # keep the real clipboard
+        append = mock.patch.object(root, "clipboard_append")
+        with report, clear, append as append:
+            self.app.copy_report()
+            self.pump(lambda: "copied" in self.app.status.cget("text"))
+        append.assert_called_once_with("report text")
 
 
 class Tray(_App):

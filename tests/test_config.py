@@ -26,19 +26,22 @@ class Settings(unittest.TestCase):
         cfg["profiles"]["Gaming"]["buttons"]["dpi_up"] = "profile:next"
         cfg["active_profile"] = "Gaming"
         cfg["tray_tip_shown"] = True
+        cfg["last_mouse"] = 0x008C
         config.save(cfg)
         again = config.load()
         self.assertEqual(again["active_profile"], "Gaming")
         self.assertEqual(again["profiles"]["Gaming"]["buttons"]["dpi_up"], "profile:next")
         self.assertTrue(again["tray_tip_shown"])
+        self.assertEqual(again["last_mouse"], 0x008C)
 
     def test_missing_values_come_from_the_factory_profile(self):
         config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        config.CONFIG_FILE.write_text('{"active_profile": "Gone", "profiles": {"A": '
+        config.CONFIG_FILE.write_text('{"last_mouse": "x", "active_profile": "Gone", "profiles": {"A": '
                                       '{"buttons": {"rear": "keys:a"}, "lighting": {"logo": '
                                       '{"brightness": 5}}}}}')
         cfg = config.load()
         self.assertEqual(cfg["active_profile"], "A")
+        self.assertIsNone(cfg["last_mouse"])
         prof = cfg["profiles"]["A"]
         self.assertEqual(prof["buttons"]["rear"], "keys:a")
         self.assertEqual(prof["buttons"]["left"], "default")

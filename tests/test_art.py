@@ -2,7 +2,10 @@ import base64
 import tkinter as tk
 import unittest
 
+from openadder import models
 from openadder.mouse_art import MouseView, design_to_px, png_rgba, tint
+
+V2_BUTTONS = models.DEFAULT.buttons
 
 
 class PngWriter(unittest.TestCase):
@@ -29,7 +32,7 @@ class View(unittest.TestCase):
         cls.root = tk.Tk()
         cls.root.update()
         cls.canvas = tk.Canvas(cls.root)
-        cls.view = MouseView(cls.canvas)
+        cls.view = MouseView(cls.canvas, V2_BUTTONS)
 
     @classmethod
     def tearDownClass(cls):
@@ -74,9 +77,21 @@ class View(unittest.TestCase):
         self.view.set_lighting({"logo": ("off", (0, 0, 0), 0), "wheel": ("off", (0, 0, 0), 9)})
         self.assertEqual(self.canvas.itemcget(self.view._zone_items["wheel"][1], "state"), "hidden")
 
+    def test_buttons_the_mouse_does_not_have_are_not_drawn(self):
+        canvas = tk.Canvas(self.root)
+        self.addCleanup(canvas.destroy)
+        view = MouseView(canvas, models.BASIC_BUTTONS)
+        self.addCleanup(view.destroy)
+        self.assertIsNone(view.hit(*design_to_px(228, 155)))  # no DPI buttons
+        self.assertIsNone(view.hit(*design_to_px(228, 424)))  # no profile button
+        self.assertEqual(view.hit(*design_to_px(180, 120)), "left")
+        self.assertNotIn("part_dpi", view._images)
+        self.assertNotIn("hl_profile", view._images)
+        self.assertEqual(len(canvas.find_all()), len(self.canvas.find_all()) - 2)
+
     def test_destroy_frees_everything(self):
         canvas = tk.Canvas(self.root)
-        view = MouseView(canvas)
+        view = MouseView(canvas, V2_BUTTONS)
         self.addCleanup(canvas.destroy)
         view.set_lighting({"logo": ("static", (1, 2, 3), 255), "wheel": ("spectrum", (0, 0, 0), 255)})
         view.destroy()

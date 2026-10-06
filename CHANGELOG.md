@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+
+- Support for more wired Razer mice (not tested yet): DeathAdder V2 Mini, DeathAdder V2 Lite,
+  DeathAdder V3 (polling rate up to 8000 Hz), DeathAdder Elite, DeathAdder Essential (also White Edition
+  and 2021), and Cobra. OpenAdder finds the mouse by itself and shows only what that mouse has.
+- Mice that do not store DPI stages: OpenAdder keeps the stages, and a button with a DPI job switches
+  between them.
+- Manage → Copy mouse report: technical data about the mouse, for bug reports.
+
 ## 1.0.0
 
 First public version.

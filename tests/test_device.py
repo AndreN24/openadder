@@ -2,7 +2,10 @@ import unittest
 from unittest import mock
 
 from openadder import device as d
+from openadder import models
 from openadder import protocol as p
+
+MINI, ELITE, ESSENTIAL, V3 = (models.BY_PID[pid] for pid in (0x008C, 0x005C, 0x006E, 0x00B2))
 
 
 class FakeHid:
@@ -40,49 +43,110 @@ class Transport(unittest.TestCase):
         self.addCleanup(sleep.stop)
 
     def test_reads_values(self):
-        dev = d.DeathAdderV2(FakeHid(args=bytes([1, 2])))
+        dev = d.RazerMouse(FakeHid(args=bytes([1, 2])))
         self.assertEqual(dev.firmware(), "1.02")
-        dev = d.DeathAdderV2(FakeHid(args=bytes([1, 0x03, 0x20, 0x03, 0x20])))
+        dev = d.RazerMouse(FakeHid(args=bytes([1, 0x03, 0x20, 0x03, 0x20])))
         self.assertEqual(dev.dpi(), (800, 800))
 
     def test_busy_is_retried(self):
         hid = FakeHid(statuses=[0x01, 0x01, 0x02], args=bytes([3]))
-        self.assertEqual(d.DeathAdderV2(hid).device_mode(), 3)
+        self.assertEqual(d.RazerMouse(hid).device_mode(), 3)
         self.assertEqual(len(hid.sent), 1)
 
     def test_failure_and_wrong_answer_raise(self):
         with self.assertRaisesRegex(d.DeviceError, "not supported"):
-            d.DeathAdderV2(FakeHid(statuses=[0x05])).set_poll_rate(500)
+            d.RazerMouse(FakeHid(statuses=[0x05])).set_poll_rate(500)
         with self.assertRaisesRegex(d.DeviceError, "different command"):
-            d.DeathAdderV2(FakeHid(echo=False)).firmware()
+            d.RazerMouse(FakeHid(echo=False)).firmware()
 
     def test_writes_send_the_protocol_reports(self):
         hid = FakeHid()
-        dev = d.DeathAdderV2(hid)
+        dev = d.RazerMouse(hid)
         dev.set_dpi(1600)
         dev.set_effect(p.LOGO_LED, "breathing", (1, 2, 3))
         dev.set_device_mode(p.DRIVER_MODE)
-        self.assertEqual(hid.sent[0][1:], p.set_dpi(1600, 1600))
-        self.assertEqual(hid.sent[1][1:], p.effect_breathing(p.LOGO_LED, (1, 2, 3)))
-        self.assertEqual(hid.sent[2][1:], p.set_device_mode(p.DRIVER_MODE))
+        v2 = lambda r: p.with_transaction_id(r, 0x3F)
+        self.assertEqual(hid.sent[0][1:], v2(p.set_dpi(1600, 1600)))
+        self.assertEqual(hid.sent[1][1:], v2(p.effect_breathing(p.LOGO_LED, (1, 2, 3))))
+        self.assertEqual(hid.sent[2][1:], v2(p.set_device_mode(p.DRIVER_MODE)))
         with self.assertRaises(ValueError):
             dev.set_effect(p.LOGO_LED, "disco")
 
     def test_open(self):
         with mock.patch.object(d.hid, "enumerate", return_value=[]):
-            with self.assertRaisesRegex(d.DeviceError, "not found"):
-                d.DeathAdderV2.open()
-        infos = [{"interface_number": 1, "path": b"one"}, {"interface_number": 0, "path": b"zero"}]
+            with self.assertRaisesRegex(d.DeviceError, "No supported"):
+                d.RazerMouse.open()
+        keyboard = {"product_id": 0x0257, "interface_number": 0, "path": b"keyboard"}
+        with mock.patch.object(d.hid, "enumerate", return_value=[keyboard]):
+            with self.assertRaisesRegex(d.DeviceError, "No supported"):
+                d.RazerMouse.open()
+        infos = [keyboard, {"product_id": 0x008C, "interface_number": 1, "path": b"one"},
+                 {"product_id": 0x008C, "interface_number": 0, "path": b"zero"}]
         good = FakeHid(args=bytes([1, 2]))
         with mock.patch.object(d.hid, "enumerate", return_value=infos), \
                 mock.patch.object(d.hid, "device", return_value=good):
-            self.assertEqual(d.DeathAdderV2.open().firmware(), "1.02")
+            dev = d.RazerMouse.open()
+        self.assertEqual(dev.model, MINI)
+        self.assertEqual(dev.firmware(), "1.02")
+        self.assertEqual(good.sent[0][2], 0x3F)  # the Mini's transaction id
         bad = FakeHid(statuses=[0x03])
         with mock.patch.object(d.hid, "enumerate", return_value=infos), \
                 mock.patch.object(d.hid, "device", return_value=bad):
             with self.assertRaisesRegex(d.DeviceError, "did not answer"):
-                d.DeathAdderV2.open()
+                d.RazerMouse.open()
         self.assertTrue(bad.closed)
+
+
+class Models(unittest.TestCase):
+    def setUp(self):
+        sleep = mock.patch.object(d.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def tid(self, hid):
+        return hid.sent[-1][2]  # byte 0 is the hidapi report id
+
+    def test_lighting_and_stages_can_use_other_transaction_ids(self):
+        hid = FakeHid(args=bytes(80))
+        essential = d.RazerMouse(hid, ESSENTIAL)
+        essential.set_dpi(800)
+        self.assertEqual(self.tid(hid), 0xFF)
+        essential.set_effect(p.LOGO_LED, "static", (0, 255, 0))
+        self.assertEqual(self.tid(hid), 0x3F)
+        mini = d.RazerMouse(hid, MINI)
+        mini.dpi_stages()
+        self.assertEqual(self.tid(hid), 0xFF)
+        mini.brightness(p.LOGO_LED)
+        self.assertEqual(self.tid(hid), 0x3F)
+
+    def test_dpi_is_limited_to_the_model(self):
+        hid = FakeHid()
+        d.RazerMouse(hid, ESSENTIAL).set_dpi(20000)
+        self.assertEqual(hid.sent[-1][10:14], bytes([0x19, 0x00, 0x19, 0x00]))  # 6400
+
+    def test_mouse_without_stage_memory(self):
+        hid = FakeHid()
+        d.RazerMouse(hid, ELITE).set_dpi_stages([(800, 800)], 1)
+        self.assertEqual(hid.sent, [])  # OpenAdder keeps the stages
+
+    def test_hyperpolling(self):
+        hid = FakeHid(args=bytes([0x00, 0x01]))
+        v3 = d.RazerMouse(hid, V3)
+        v3.set_poll_rate(8000)
+        self.assertEqual([r[1:] for r in hid.sent],
+                         [p.with_transaction_id(p.set_poll_rate_v2(8000, a), 0x1F) for a in (0, 1)])
+        self.assertEqual(v3.poll_rate(), 8000)
+
+    def test_diagnostic_report(self):
+        infos = [{"product_id": 0x0084, "interface_number": i} for i in (0, 1, 2)]
+        with mock.patch.object(d.hid, "enumerate", return_value=infos):
+            self.assertIn("Mouse: not connected", d.diagnostic_report())
+            dev = d.RazerMouse(FakeHid(statuses=[0x05]), MINI)
+            text = d.diagnostic_report(dev)
+        self.assertIn("1532:0084 (interfaces 0, 1, 2)", text)
+        self.assertIn("Mouse: DeathAdder V2 Mini (1532:008c), not tested yet", text)
+        self.assertIn("DPI stages: error:", text)
+        self.assertIn("logo brightness: error:", text)
 
 
 class Listener(unittest.TestCase):
@@ -127,8 +191,9 @@ class Listener(unittest.TestCase):
                 pass
 
         listener = d.ButtonListener(lambda *a: None)
-        with mock.patch.object(d.hid, "enumerate", return_value=infos),                 mock.patch.object(d.hid, "device", side_effect=Handle):
-            listener.start()
+        with mock.patch.object(d.hid, "enumerate", return_value=infos), \
+                mock.patch.object(d.hid, "device", side_effect=Handle):
+            listener.start(0x0084)
         self.assertEqual(opened, [b"vendor-a"])
         self.assertEqual(len(listener._threads), 1)
         listener.stop()

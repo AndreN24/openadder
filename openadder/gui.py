@@ -13,9 +13,9 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 
-from . import __version__, config, protocol as p, theme
+from . import __version__, config, models, protocol as p, theme
 from .actions import BUTTON_NAMES, BUTTONS, CATALOG, describe, label
-from .device import ButtonListener, DeathAdderV2, DeviceError
+from .device import ButtonListener, DeviceError, RazerMouse, diagnostic_report
 from .dialogs import NameDialog, RecordKeysDialog
 from .mouse_art import MouseView, design_to_px
 from .tray import MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_ESCAPE, MenuItem, Separator, Tray
@@ -24,9 +24,8 @@ from .remap import DRIVER_BUTTONS, Remapper, validate_action
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 ICON = _BASE / "assets" / "openadder.ico"
 
-EFFECTS = ["static", "breathing", "spectrum", "reactive", "off"]
 EFFECTS_WITH_COLOR = {"static", "breathing", "reactive"}
-ZONES = [("logo", "Logo", p.LOGO_LED), ("wheel", "Scroll wheel", p.SCROLL_WHEEL_LED)]
+ZONE_NAMES = {"logo": "Logo", "wheel": "Scroll wheel"}
 
 STATUS_SECONDS = 5
 
@@ -38,6 +37,7 @@ def _hex(color):
 class App:
     def __init__(self, start_minimized=False):
         self.cfg = config.load()
+        self.model = models.BY_PID.get(self.cfg["last_mouse"], models.DEFAULT)
         self.dev = None
         self._sniper_restore = None
         self._ui_queue = queue.Queue()
@@ -141,13 +141,13 @@ class App:
     # --- UI layout ----------------------------------------------------------------
 
     def _build_ui(self):
-
-        main = ttk.Frame(self.root, padding=(18, 14, 18, 12))
+        """Builds the window for self.model: only the buttons, LEDs and settings it has."""
+        main = self._main = ttk.Frame(self.root, padding=(18, 14, 18, 12))
         main.grid(sticky="nsew")
 
         header = ttk.Frame(main)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        ttk.Label(header, text="DeathAdder V2", style="Title.TLabel").pack(side="left")
+        ttk.Label(header, text=self.model.name, style="Title.TLabel").pack(side="left")
         ttk.Label(header, text="Profile").pack(side="left", padx=(24, 6))
         self.profile_var = tk.StringVar(value=self.cfg["active_profile"])
         self.profile_combo = ttk.Combobox(header, textvariable=self.profile_var, width=16,
@@ -164,37 +164,45 @@ class App:
         menu.add_separator()
         menu.add_command(label="Reset this profile", command=self.reset_profile)
         menu.add_command(label="Reset everything…", command=self.reset_everything)
+        menu.add_separator()
+        menu.add_command(label="Copy mouse report (for bug reports)", command=self.copy_report)
         manage["menu"] = menu
         manage.pack(side="left", padx=6)
         self.conn_label = ttk.Label(header, text="● Looking for the mouse…", style="Hint.TLabel")
         self.conn_label.pack(side="right")
         self._refresh_profile_list()
 
-        # Mouse picture
-        left = ttk.Frame(main)
-        left.grid(row=1, column=0, sticky="n", padx=(0, 18))
-        self.canvas = tk.Canvas(left, bg=theme.BG, highlightthickness=0)
-        self.canvas.pack()
-        self.view = MouseView(self.canvas)
-        w, h = self.view.size
-        self.canvas.configure(width=w, height=h)
-        px, py = design_to_px(228, 424)
-        self._pill_text = self.canvas.create_text(px, py, text="Profile (bottom)",
-                                                  fill=theme.MUTED, font=("Consolas", 8))
-        self.canvas.bind("<Motion>", self._on_canvas_motion)
-        self.canvas.bind("<Leave>", lambda _e: self._set_hover(None))
-        self.canvas.bind("<Button-1>", self._on_canvas_click)
-        self.caption = ttk.Label(left, text="", style="Caption.TLabel", width=44, anchor="center",
-                                 justify="center", wraplength=w - 8)
-        self.caption.pack(pady=(6, 0))
+        # Mouse picture (a model without a fitting picture gets only the list)
+        self.view = None
+        if self.model.picture:
+            left = ttk.Frame(main)
+            left.grid(row=1, column=0, sticky="n", padx=(0, 18))
+            self.canvas = tk.Canvas(left, bg=theme.BG, highlightthickness=0)
+            self.canvas.pack()
+            self.view = MouseView(self.canvas, self.model.buttons)
+            w, h = self.view.size
+            self.canvas.configure(width=w, height=h)
+            if "profile" in self.model.buttons:
+                px, py = design_to_px(228, 424)
+                self.canvas.create_text(px, py, text="Profile (bottom)", tags="pill",
+                                        fill=theme.MUTED, font=("Consolas", 8))
+            self.canvas.bind("<Motion>", self._on_canvas_motion)
+            self.canvas.bind("<Leave>", lambda _e: self._set_hover(None))
+            self.canvas.bind("<Button-1>", self._on_canvas_click)
+            self.caption = ttk.Label(left, text="", style="Caption.TLabel", width=44,
+                                     anchor="center", justify="center", wraplength=w - 8)
+            self.caption.pack(pady=(6, 0))
 
         # Tabs
+        self.zone_vars = {}  # stays empty for a mouse without lighting
         self.tabs = ttk.Notebook(main)
-        self.tabs.grid(row=1, column=1, sticky="nsew")
+        self.tabs.grid(row=1, column=1 if self.model.picture else 0,
+                       columnspan=1 if self.model.picture else 2, sticky="nsew")
         self.buttons_tab = self._build_buttons(self.tabs)
         self.tabs.add(self.buttons_tab, text="  Buttons  ")
         self.tabs.add(self._build_performance(self.tabs), text="  DPI  ")
-        self.tabs.add(self._build_lighting(self.tabs), text="  Lighting  ")
+        if self.model.leds:
+            self.tabs.add(self._build_lighting(self.tabs), text="  Lighting  ")
 
         footer = ttk.Frame(main)
         footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
@@ -221,7 +229,8 @@ class App:
         self._hint(frame, "Choose what each button does. Changes work at once. "
                           "OpenAdder must run for this; it can stay in the tray.", row=0)
         self.action_buttons, self.action_menus = {}, {}
-        for i, (key, name, _what) in enumerate(BUTTONS):
+        rows = [b for b in BUTTONS if b[0] in self.model.buttons]
+        for i, (key, name, _what) in enumerate(rows):
             row = i + 1
             name_label = ttk.Label(frame, text=name, width=21)
             name_label.grid(row=row, column=0, sticky="w", pady=2)
@@ -237,16 +246,16 @@ class App:
         self._refresh_action_buttons()
 
         sniper = ttk.Frame(frame)
-        sniper.grid(row=len(BUTTONS) + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        sniper.grid(row=len(rows) + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Label(sniper, text="Sniper DPI").pack(side="left")
         self.sniper_var = tk.IntVar(value=self.prof["sniper_dpi"])
-        ttk.Spinbox(sniper, from_=p.MIN_DPI, to=p.MAX_DPI, increment=50, width=7,
+        ttk.Spinbox(sniper, from_=p.MIN_DPI, to=self.model.max_dpi, increment=50, width=7,
                     textvariable=self.sniper_var).pack(side="left", padx=8)
         self.sniper_var.trace_add("write", lambda *_: self._debounce("sniper", 600, self._save_sniper))
         ttk.Label(sniper, text="used by “Sniper DPI (hold)”", style="Hint.TLabel").pack(side="left")
-        self._reset_link(frame, "Reset all buttons", self.reset_buttons, len(BUTTONS) + 2)
+        self._reset_link(frame, "Reset all buttons", self.reset_buttons, len(rows) + 2)
         self._hint(frame, "Emergency: Ctrl+Alt+Shift+Esc sets all buttons back to normal, "
-                          "from anywhere.", row=len(BUTTONS) + 3, pady=(8, 0))
+                          "from anywhere.", row=len(rows) + 3, pady=(8, 0))
         return frame
 
     def _action_menu(self, parent, key):
@@ -269,8 +278,12 @@ class App:
         frame = ttk.Frame(parent, padding=14)
         ttk.Label(frame, text="DPI stages", style="Section.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="w")
-        self._hint(frame, "DPI is the speed of the pointer: a higher number is faster. "
-                          "The DPI buttons on the mouse switch between the stages that are on.",
+        if self.model.stages:
+            how = "The DPI buttons on the mouse switch between the stages that are on."
+        else:
+            how = ("This mouse does not store stages, so OpenAdder keeps them. A button with a "
+                   "DPI job switches between them.")
+        self._hint(frame, "DPI is the speed of the pointer: a higher number is faster. " + how,
                    row=1, pady=(0, 8))
         self.stage_used, self.stage_dpi = [], []
         self.active_stage = tk.IntVar(value=1)
@@ -279,7 +292,7 @@ class App:
             dpi = tk.IntVar(value=800)
             ttk.Checkbutton(frame, text=f"Stage {i + 1}", variable=used).grid(
                 row=i + 2, column=0, sticky="w", pady=3)
-            ttk.Spinbox(frame, from_=p.MIN_DPI, to=p.MAX_DPI, increment=50, width=8,
+            ttk.Spinbox(frame, from_=p.MIN_DPI, to=self.model.max_dpi, increment=50, width=8,
                         textvariable=dpi).grid(row=i + 2, column=1, padx=10)
             ttk.Radiobutton(frame, text="Active", variable=self.active_stage, value=i + 1).grid(
                 row=i + 2, column=2, sticky="w")
@@ -291,14 +304,18 @@ class App:
 
         ttk.Label(frame, text="Polling rate", style="Section.TLabel").grid(
             row=8, column=0, sticky="w", pady=(16, 0))
-        self._hint(frame, "How often the mouse reports to the PC. 1000 Hz is the smoothest.",
-                   row=9, pady=(0, 6))
+        rates = self.model.poll_rates
+        if max(rates) > 1000:
+            text = "How often the mouse reports to the PC. Higher is smoother, but uses more CPU."
+        else:
+            text = "How often the mouse reports to the PC. 1000 Hz is the smoothest."
+        self._hint(frame, text, row=9, pady=(0, 6))
         self.poll_var = tk.StringVar(value="1000")
         poll = ttk.Frame(frame)
         poll.grid(row=10, column=0, columnspan=3, sticky="w")
-        for hz in ("125", "500", "1000"):
-            ttk.Radiobutton(poll, text=f"{hz} Hz", variable=self.poll_var, value=hz).pack(
-                side="left", padx=(0, 14))
+        for hz in rates:
+            ttk.Radiobutton(poll, text=f"{hz} Hz", variable=self.poll_var, value=str(hz)).pack(
+                side="left", padx=(0, 14 if len(rates) <= 3 else 8))
         self.poll_var.trace_add("write", self._on_dpi_edit)
         self._hint(frame, "Changes are saved on the mouse by themselves, so they also work "
                           "without OpenAdder.", row=11, pady=(16, 0))
@@ -309,17 +326,16 @@ class App:
         frame = ttk.Frame(parent, padding=14)
         self._hint(frame, "Lighting is saved on the mouse, so it stays when OpenAdder is closed.",
                    row=0)
-        self.zone_vars = {}
-        for i, (key, zone_label, _led) in enumerate(ZONES):
+        for i, key in enumerate(self.model.leds):
             zcfg = self.prof["lighting"][key]
             effect = tk.StringVar(value=zcfg["effect"])
             color = list(zcfg["color"])
             bright = tk.IntVar(value=zcfg["brightness"])
             r = 1 + i * 4
-            ttk.Label(frame, text=zone_label, style="Section.TLabel").grid(
+            ttk.Label(frame, text=ZONE_NAMES[key], style="Section.TLabel").grid(
                 row=r, column=0, columnspan=3, sticky="w", pady=(0 if i == 0 else 16, 6))
             ttk.Label(frame, text="Effect").grid(row=r + 1, column=0, sticky="w")
-            combo = ttk.Combobox(frame, textvariable=effect, values=EFFECTS, width=12,
+            combo = ttk.Combobox(frame, textvariable=effect, values=self.model.effects, width=12,
                                  state="readonly")
             combo.grid(row=r + 1, column=1, sticky="w", padx=10, pady=3)
             combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_lighting())
@@ -333,8 +349,10 @@ class App:
                 row=r + 2, column=1, columnspan=2, sticky="w", padx=10, pady=3)
             self.zone_vars[key] = {"effect": effect, "color": color, "bright": bright,
                                    "swatch": swatch}
-        self._hint(frame, "Click the colour box to choose a colour. Spectrum cycles through all "
-                          "colours. Reactive lights up when you click.", row=10, pady=(16, 0))
+        text = "Click the colour box to choose a colour."
+        if "spectrum" in self.model.effects:
+            text += " Spectrum cycles through all colours. Reactive lights up when you click."
+        self._hint(frame, text, row=10, pady=(16, 0))
         self._reset_link(frame, "Reset lighting", self.reset_lighting, 11)
         self._refresh_swatches()
         return frame
@@ -356,7 +374,7 @@ class App:
             return
         self.view.set_lighting(self._lighting())
         self.view.set_highlight(self._hover or self._selected)  # one at a time
-        self.canvas.tag_raise(self._pill_text)
+        self.canvas.tag_raise("pill")
         key = self._hover or self._selected
         if key:
             self.caption.configure(text=f"{BUTTON_NAMES[key]}\n"
@@ -406,10 +424,8 @@ class App:
             self.listener.stop()
             if old:
                 old.close()
-            dev = DeathAdderV2.open()
-            info = {"dev": dev, "fw": dev.firmware(), "poll": dev.poll_rate(),
-                    "bright": {k: dev.brightness(led) for k, _, led in ZONES}}
-            info["stages"], info["active"] = dev.dpi_stages()
+            dev = RazerMouse.open()
+            info = {"dev": dev, "fw": dev.firmware(), **self._read_mouse(dev)}
             if dev.device_mode() != p.NORMAL_MODE:  # left over from a crash
                 dev.set_device_mode(p.NORMAL_MODE)
             return info
@@ -424,7 +440,10 @@ class App:
                 self._debounce("reconnect", 3000, lambda: self.connect(quiet=True))
                 return
             self.dev = info["dev"]
-            self.conn_label.configure(text=f"● Connected · firmware {info['fw']}",
+            if self.dev.model != self.model:
+                self._use_model(self.dev.model)
+            untested = "" if self.model.tested else " · not tested yet"
+            self.conn_label.configure(text=f"● Connected · firmware {info['fw']}{untested}",
                                       foreground=theme.GREEN)
             self._take_mouse_values(info)
             self._sync_driver_mode()
@@ -433,10 +452,32 @@ class App:
 
         self._io(job, done)
 
+    @staticmethod
+    def _read_mouse(dev):
+        """Runs on the USB thread: the values that the mouse stores."""
+        info = {"poll": dev.poll_rate(),
+                "bright": {k: dev.brightness(p.LEDS[k]) for k in dev.model.leds}}
+        if dev.model.stages:
+            info["stages"], info["active"] = dev.dpi_stages()
+        return info
+
+    def _use_model(self, model):
+        """Builds the window again for another mouse model."""
+        self.model = model
+        self.cfg["last_mouse"] = model.pid
+        config.save(self.cfg)
+        self._release_art()
+        self._main.destroy()
+        self._selected = self._hover = None
+        self._build_ui()
+        if not self._visible:
+            self._release_art()
+
     def _take_mouse_values(self, info):
         """The mouse holds the real DPI, polling rate and brightness: show them."""
         prof = self.prof
-        prof["dpi"] = {"stages": [x for x, _ in info["stages"]], "active": max(1, info["active"])}
+        if "stages" in info:
+            prof["dpi"] = {"stages": [x for x, _ in info["stages"]], "active": max(1, info["active"])}
         prof["poll"] = info["poll"] or prof["poll"]
         for key, value in info["bright"].items():
             prof["lighting"][key]["brightness"] = value
@@ -447,12 +488,8 @@ class App:
         if not dev:
             return
 
-        def job():
-            stages, active = dev.dpi_stages()
-            return {"stages": stages, "active": active, "poll": dev.poll_rate(),
-                    "bright": {k: dev.brightness(led) for k, _, led in ZONES}}
-
-        self._io(job, lambda info, err: None if err else self._take_mouse_values(info))
+        self._io(lambda: self._read_mouse(dev),
+                 lambda info, err: None if err else self._take_mouse_values(info))
 
     def _lost(self):
         if not self.dev:
@@ -466,7 +503,8 @@ class App:
 
     def _sync_driver_mode(self):
         """Driver mode is on only while a DPI or profile button is remapped."""
-        need = any(self.prof["buttons"][b] != "default" for b in DRIVER_BUTTONS)
+        need = any(self.prof["buttons"][b] != "default"
+                   for b in DRIVER_BUTTONS if b in self.model.buttons)
         dev = self.dev
         if not dev or need == self._driver_mode:
             return
@@ -475,7 +513,7 @@ class App:
         def job():
             if need:
                 dev.set_device_mode(p.DRIVER_MODE)
-                self.listener.start()
+                self.listener.start(dev.model.pid)
             else:
                 self.listener.stop()
                 dev.set_device_mode(p.NORMAL_MODE)
@@ -525,8 +563,9 @@ class App:
             sniper = int(self.sniper_var.get())
         except (ValueError, tk.TclError):
             sniper = 0
-        if not p.MIN_DPI <= sniper <= p.MAX_DPI:
-            self.set_status(f"Sniper DPI: use a number from {p.MIN_DPI} to {p.MAX_DPI}.", error=True)
+        if not p.MIN_DPI <= sniper <= self.model.max_dpi:
+            self.set_status(f"Sniper DPI: use a number from {p.MIN_DPI} to {self.model.max_dpi}.",
+                            error=True)
             return
         if sniper != self.prof["sniper_dpi"]:
             self.prof["sniper_dpi"] = sniper
@@ -539,7 +578,11 @@ class App:
         if not dev:
             return
         if action in ("up", "down", "cycle") and pressed:
-            stages, active = dev.dpi_stages()
+            if dev.model.stages:
+                stages, active = dev.dpi_stages()
+            else:  # OpenAdder keeps the stages of this mouse
+                stages = [(d, d) for d in self.prof["dpi"]["stages"]]
+                active = self.prof["dpi"]["active"]
             if not stages:
                 return
             n = len(stages)
@@ -572,8 +615,9 @@ class App:
                     dpi = int(self.stage_dpi[i].get())
                 except (ValueError, tk.TclError):
                     dpi = 0
-                if not p.MIN_DPI <= dpi <= p.MAX_DPI:
-                    raise ValueError(f"Stage {i + 1}: use a number from {p.MIN_DPI} to {p.MAX_DPI}.")
+                if not p.MIN_DPI <= dpi <= self.model.max_dpi:
+                    raise ValueError(f"Stage {i + 1}: use a number from {p.MIN_DPI} "
+                                     f"to {self.model.max_dpi}.")
                 chosen.append((i + 1, dpi))
         if not chosen:
             raise ValueError("Turn on at least one DPI stage.")
@@ -642,10 +686,9 @@ class App:
             return
 
         def job():
-            for key, _label, led in ZONES:
-                effect, color, bright = lighting[key]
-                dev.set_effect(led, effect, color)
-                dev.set_brightness(led, bright)
+            for key, (effect, color, bright) in lighting.items():
+                dev.set_effect(p.LEDS[key], effect, color)
+                dev.set_brightness(p.LEDS[key], bright)
 
         self._io(job, lambda _r, e: self.set_status(str(e) if e else "Lighting saved on the mouse.",
                                                      error=bool(e)))
@@ -669,32 +712,38 @@ class App:
             if i < len(stages):
                 self.stage_dpi[i].set(stages[i])
         self.active_stage.set(prof["dpi"]["active"])
-        self.poll_var.set(str(prof["poll"]))
+        self.poll_var.set(str(self._poll_for(prof)))
         for key, z in self.zone_vars.items():
             zcfg = prof["lighting"][key]
-            z["effect"].set(zcfg["effect"])
+            z["effect"].set(zcfg["effect"] if zcfg["effect"] in self.model.effects else "static")
             z["color"][:] = zcfg["color"]
             z["bright"].set(zcfg["brightness"])
         self._refresh_swatches()
         self._loading = False
         self._redraw()
 
+    def _poll_for(self, prof):
+        """The profile's polling rate, or 1000 Hz if this mouse cannot do it."""
+        return prof["poll"] if prof["poll"] in self.model.poll_rates else 1000
+
     def _apply_profile_to_mouse(self):
+        """Call after _load_profile_into_ui: the lighting comes from the form."""
         dev = self.dev
         if not dev:
             return
         prof = copy.deepcopy(self.prof)
+        poll = self._poll_for(prof)
+        lighting = self._lighting()
 
         def job():
             stages = prof["dpi"]["stages"]
             active = max(1, min(prof["dpi"]["active"], len(stages)))
             dev.set_dpi_stages([(d, d) for d in stages], active)
             dev.set_dpi(stages[active - 1])
-            dev.set_poll_rate(prof["poll"])
-            for key, _label, led in ZONES:
-                zcfg = prof["lighting"][key]
-                dev.set_effect(led, zcfg["effect"], tuple(zcfg["color"]))
-                dev.set_brightness(led, zcfg["brightness"])
+            dev.set_poll_rate(poll)
+            for key, (effect, color, bright) in lighting.items():
+                dev.set_effect(p.LEDS[key], effect, color)
+                dev.set_brightness(p.LEDS[key], bright)
 
         self._io(job)
 
@@ -806,10 +855,25 @@ class App:
                 "to its factory settings, and turns off “Start with Windows”.", parent=self.root):
             return
         self.cfg = config.factory_settings()
+        self.cfg["last_mouse"] = self.model.pid
         config.set_autostart(False)
         self.autostart_var.set(False)
         self.switch_profile(config.DEFAULT_PROFILE_NAME)
         self.set_status("Everything is back to the factory settings.")
+
+    def copy_report(self):
+        """Copies a plain-text report about the mouse, for bug reports and new models."""
+        dev = self.dev
+
+        def done(text, error):
+            if error:
+                self.set_status(str(error), error=True)
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.set_status("Mouse report copied. Paste it into your bug report.")
+
+        self._io(lambda: diagnostic_report(dev), done)
 
     # --- Autostart, tray, window ------------------------------------------------------------------
 
@@ -842,8 +906,8 @@ class App:
 
     def show(self):
         self._visible = True
-        if self.view is None:
-            self.view = MouseView(self.canvas)
+        if self.view is None and self.model.picture:
+            self.view = MouseView(self.canvas, self.model.buttons)
             self._redraw()
         self.root.deiconify()
         theme.dark_title_bar(self.root)

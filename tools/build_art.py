@@ -6,7 +6,8 @@ The heavy work (4x supersampling, blur) happens here, once, so the app itself
 only loads small PNG files.
 Needs Python 3 and Pillow (only to build the art, not to run the app). The outline geometry is adapted from Snakecharmer's
 DeathAdder Elite diagram (https://github.com/asavs/snakecharmer,
-GPL-2.0-or-later). The Elite and the V2 share the same shell and button layout.
+GPL-2.0-or-later). The Elite and the V2 share the same shell and button layout; the
+other DeathAdder models are close enough to use the same picture.
 """
 
 import base64
@@ -70,7 +71,9 @@ CHIP_DOWN = (250, 117, 264, 131)
 CABLE_SLOT = (214, 26, 242, 70)
 
 # Parts that get a thin outline so it is clear they are clickable.
-OUTLINED = ("middle", "front", "rear", "dpi_up", "dpi_down", "profile", "chip_up", "chip_down")
+OUTLINED = ("middle", "front", "rear", "chip_up", "chip_down")
+# Buttons that not every model has: each group is its own layer, shown only when the mouse has it.
+PARTS = {"part_dpi": ("dpi_up", "dpi_down"), "part_profile": ("profile",)}
 
 
 
@@ -194,8 +197,7 @@ class ArtBuilder:
         d.line(_pts(_bezier(LEFT_GRIP)), fill=(27, 28, 31, 255), width=_w(2), joint="curve")
         d.line(_pts(_bezier(SEAM_LEFT) + _bezier(SEAM_RIGHT)[1:]), fill=seam, width=_w(1.4),
                joint="curve")
-        d.line(_pts([(228, 131), (228, 140)]), fill=seam, width=_w(1.4))
-        d.line(_pts([(228, 201), (228, 223)]), fill=seam, width=_w(1.4))
+        d.line(_pts([(228, 131), (228, 223)]), fill=seam, width=_w(1.4))
         d.polygon(_pts(_bezier(BODY)), outline=line, width=_w(1.2))
 
         # Dark channel behind the wheel, and the cable boot.
@@ -203,14 +205,10 @@ class ArtBuilder:
         d.rounded_rectangle(_box((220, 10, 236, 30)), radius=_w(2), fill=(30, 31, 34, 255))
         d.line(_pts([(228, -18), (228, 10)]), fill=(30, 31, 34, 255), width=_w(4))
 
-        # DPI buttons, side buttons, profile pill.
-        for box in (DPI_UP, DPI_DOWN):
-            d.rounded_rectangle(_box(box), radius=_w(4), fill=part, outline=line, width=_w(1))
+        # Side buttons.
         for path in (FRONT_SIDE, REAR_SIDE):
             d.polygon(_pts(_bezier(path)), fill=(66, 69, 76, 255), outline=(98, 102, 110, 255),
                       width=_w(1))
-        d.rounded_rectangle(_box(PROFILE_PILL), radius=_w(12), fill=(44, 46, 51, 255),
-                            outline=line, width=_w(1))
         for box, up in ((CHIP_UP, True), (CHIP_DOWN, False)):
             d.ellipse(_box(box), fill=part, outline=line, width=_w(1))
             cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
@@ -219,11 +217,25 @@ class ArtBuilder:
         self._below = below.resize(self.size, Image.LANCZOS)
 
         # Thin accent outline around every clickable part.
-        edge = Image.new("L", self.size, 0)
-        for key in OUTLINED:
-            m = self.masks[key]
-            edge = ImageChops.lighter(edge, ImageChops.subtract(m.filter(ImageFilter.MaxFilter(3)), m))
-        self._outline = edge.point(lambda v: v * 0.8)
+        self._outline = self._edge(OUTLINED)
+
+        # DPI buttons and profile pill, each group with its own outline.
+        self._parts = {}
+        for name, keys in PARTS.items():
+            layer = Image.new("RGBA", big, (0, 0, 0, 0))
+            d = ImageDraw.Draw(layer)
+            for key in keys:
+                if key == "profile":
+                    d.rounded_rectangle(_box(PROFILE_PILL), radius=_w(12), fill=part, outline=line,
+                                        width=_w(1))
+                else:
+                    d.rounded_rectangle(_box(DPI_UP if key == "dpi_up" else DPI_DOWN), radius=_w(4),
+                                        fill=part, outline=line, width=_w(1))
+            layer = layer.resize(self.size, Image.LANCZOS)
+            accent = Image.new("RGBA", self.size, (*ACCENT, 255))
+            accent.putalpha(self._edge(keys))
+            layer.alpha_composite(accent)
+            self._parts[name] = layer
 
         # Top layer: wheel details drawn over the lighting colour.
         top = Image.new("RGBA", big, (0, 0, 0, 0))
@@ -248,6 +260,13 @@ class ArtBuilder:
             for x in range(self.size[0]):
                 px[x, y] = (int(r * 255), int(g * 255), int(b * 255), 255)
         self._spectrum = hue
+
+    def _edge(self, keys):
+        edge = Image.new("L", self.size, 0)
+        for key in keys:
+            m = self.masks[key]
+            edge = ImageChops.lighter(edge, ImageChops.subtract(m.filter(ImageFilter.MaxFilter(3)), m))
+        return edge.point(lambda v: v * 0.8)
 
     # --- export ---------------------------------------------------------------
 
@@ -277,6 +296,8 @@ class ArtBuilder:
             return base64.b64encode(zlib.compress(data, 9)).decode("ascii")
 
         save("below", self._below)
+        for name, layer in self._parts.items():
+            save(name, layer)
         save("top", self._top)
         save("outline", rgba(ACCENT, self._outline))
         for key in HIT_ORDER:
@@ -298,6 +319,7 @@ class ArtBuilder:
             hitmap.paste(i + 1, mask=m)
 
         manifest = {"size": list(self.size), "hit_order": list(HIT_ORDER), "layers": layers,
+                    "parts": {name: list(keys) for name, keys in PARTS.items()},
                     "zones": zones, "hitmap": packed(hitmap.tobytes())}
         (out / "art.json").write_text(json.dumps(manifest), encoding="utf-8")
 

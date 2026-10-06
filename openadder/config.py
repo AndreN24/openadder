@@ -45,14 +45,19 @@ def _fill_profile(saved: dict) -> dict:
 
 
 def factory_settings() -> dict:
-    """All settings as on a first start: one "Default" profile with the factory values."""
+    """All settings as on a first start: one "Default" profile with the factory values.
+
+    last_mouse is the USB product id of the last connected mouse, so that the window
+    fits that model before the mouse answers.
+    """
     return {"active_profile": DEFAULT_PROFILE_NAME,
             "profiles": {DEFAULT_PROFILE_NAME: default_profile()},
-            "tray_tip_shown": False}
+            "tray_tip_shown": False,
+            "last_mouse": None}
 
 
 def load() -> dict:
-    """Returns {"active_profile": name, "profiles": {name: profile}, "tray_tip_shown": bool}."""
+    """Returns the settings in the form of factory_settings()."""
     try:
         saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -63,8 +68,10 @@ def load() -> dict:
     active = saved.get("active_profile")
     if active not in profiles:
         active = next(iter(profiles))
+    last_mouse = saved.get("last_mouse")
     return {"active_profile": active, "profiles": profiles,
-            "tray_tip_shown": bool(saved.get("tray_tip_shown"))}
+            "tray_tip_shown": bool(saved.get("tray_tip_shown")),
+            "last_mouse": last_mouse if isinstance(last_mouse, int) else None}
 
 
 def save(cfg: dict):

@@ -1,7 +1,8 @@
-"""DeathAdder V2 picture, drawn as layers on a Tk canvas. No image library is needed.
+"""DeathAdder picture, drawn as layers on a Tk canvas. No image library is needed.
 
 tools/build_art.py pre-renders the layers as PNG files (Tk reads PNG itself) and
 writes art.json: where each layer goes, the lighting zones and the hit map.
+The DPI buttons and the profile button are separate layers, shown only on models that have them.
 Only one part is highlighted at a time; changing it only swaps one small layer. A lighting change re-tints one
 small zone image with the PNG writer below.
 """
@@ -56,18 +57,26 @@ def tint(alpha: bytes, level: float, color=None, spectrum: bytes = None) -> byte
 
 
 class MouseView:
-    """Owns the canvas items of the picture. destroy() frees all images."""
+    """Owns the canvas items of the picture. destroy() frees all images.
 
-    def __init__(self, canvas: tk.Canvas, art_dir: Path = ART_DIR):
+    buttons: the buttons that the mouse has. Only these are drawn and clickable.
+    """
+
+    def __init__(self, canvas: tk.Canvas, buttons, art_dir: Path = ART_DIR):
         self.canvas = canvas
         manifest = json.loads((art_dir / "art.json").read_text(encoding="utf-8"))
         self.size = tuple(manifest["size"])
         self.hit_order = manifest["hit_order"]
+        self.buttons = set(buttons)
+        parts = [name for name, keys in manifest["parts"].items() if self.buttons & set(keys)]
+        unused = set(manifest["parts"]) - set(parts)
+        unused |= {f"hl_{key}" for key in self.hit_order if key not in self.buttons}
         self._hitmap = _unpack(manifest["hitmap"])
         self._zones = {z: {"offset": tuple(d["offset"]), "size": tuple(d["size"]),
                            "alpha": _unpack(d["alpha"]), "spectrum": _unpack(d["spectrum"])}
                        for z, d in manifest["zones"].items()}
-        self._offsets = {name: tuple(xy) for name, xy in manifest["layers"].items()}
+        self._offsets = {name: tuple(xy) for name, xy in manifest["layers"].items()
+                         if name not in unused}
         self._images = {name: tk.PhotoImage(master=canvas, file=str(art_dir / f"{name}.png"))
                         for name in self._offsets}
         self._zone_images = {}
@@ -77,7 +86,7 @@ class MouseView:
             x, y = self._offsets[name]
             return canvas.create_image(x, y, anchor="nw", image=self._images[name])
 
-        self._items = [item("below")]
+        self._items = [item("below")] + [item(name) for name in parts]
         self._zone_items = {}
         for zone, z in self._zones.items():
             off = item(f"zone_{zone}_off")
@@ -93,7 +102,8 @@ class MouseView:
         if not (0 <= x < w and 0 <= y < h):
             return None
         v = self._hitmap[int(y) * w + int(x)]
-        return self.hit_order[v - 1] if 0 < v <= len(self.hit_order) else None
+        key = self.hit_order[v - 1] if 0 < v <= len(self.hit_order) else None
+        return key if key in self.buttons else None
 
     def set_lighting(self, lighting):
         """lighting: {"logo": (effect, (r, g, b), brightness), "wheel": (...)}"""

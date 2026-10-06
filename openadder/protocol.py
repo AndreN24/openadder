@@ -1,12 +1,12 @@
-"""Razer HID control protocol for the DeathAdder V2.
+"""Razer HID control protocol for the supported mice (see models.py).
 
 All command bytes come from the public OpenRazer project
 (driver/razerchromacommon.c, driver/razermouse_driver.c) and from
-gpoulios/deathadderv2 (DPI stages, tested on this mouse).
+gpoulios/deathadderv2 (DPI stages, tested on the DeathAdder V2).
 
 A report is 90 bytes:
     0      status          (0x00 new, 0x02 OK, 0x01 busy, 0x03 fail, 0x04 timeout, 0x05 unsupported)
-    1      transaction id  (0x3F for the DeathAdder V2)
+    1      transaction id  (depends on the model: the device fills it in, see with_transaction_id)
     2-3    remaining packets (big endian, always 0 here)
     4      protocol type   (always 0)
     5      data size       (number of argument bytes used)
@@ -20,13 +20,13 @@ A report is 90 bytes:
 from dataclasses import dataclass
 
 REPORT_LEN = 90
-TRANSACTION_ID = 0x3F
 
 NOSTORE = 0x00
 VARSTORE = 0x01
 
 SCROLL_WHEEL_LED = 0x01
 LOGO_LED = 0x04
+LEDS = {"logo": LOGO_LED, "wheel": SCROLL_WHEEL_LED}
 
 STATUS_NAMES = {
     0x00: "new",
@@ -38,7 +38,7 @@ STATUS_NAMES = {
 }
 
 MIN_DPI = 100
-MAX_DPI = 20000
+MAX_DPI = 30000    # highest of all models; each model has its own limit
 MAX_DPI_STAGES = 5
 
 POLL_RATE_TO_BYTE = {1000: 0x01, 500: 0x02, 125: 0x08}
@@ -56,13 +56,17 @@ def build(command_class: int, command_id: int, data_size: int, args: bytes = b""
     if len(args) > 80:
         raise ValueError("arguments longer than 80 bytes")
     r = bytearray(REPORT_LEN)
-    r[1] = TRANSACTION_ID
     r[5] = data_size
     r[6] = command_class
     r[7] = command_id
     r[8:8 + len(args)] = args
     r[88] = crc(r)
     return bytes(r)
+
+
+def with_transaction_id(request: bytes, tid: int) -> bytes:
+    """The request for a model with this transaction id. Byte 1 is not part of the CRC."""
+    return request[:1] + bytes((tid,)) + request[2:]
 
 
 @dataclass
@@ -116,6 +120,26 @@ def get_poll_rate() -> bytes:
 
 def parse_poll_rate(resp: Response) -> int:
     return BYTE_TO_POLL_RATE.get(resp.args[0], 0)
+
+
+# The DeathAdder V3 and newer mice use another command, for up to 8000 Hz.
+POLL_RATE_V2_TO_BYTE = {8000: 0x01, 4000: 0x02, 2000: 0x04, 1000: 0x08, 500: 0x10, 125: 0x40}
+BYTE_TO_POLL_RATE_V2 = {v: k for k, v in POLL_RATE_V2_TO_BYTE.items()}
+
+
+def set_poll_rate_v2(hz: int, argument: int) -> bytes:
+    """Razer sends this twice, with argument 0x00 and then 0x01."""
+    if hz not in POLL_RATE_V2_TO_BYTE:
+        raise ValueError(f"polling rate must be one of {sorted(POLL_RATE_V2_TO_BYTE)}")
+    return build(0x00, 0x40, 0x02, bytes((argument, POLL_RATE_V2_TO_BYTE[hz])))
+
+
+def get_poll_rate_v2() -> bytes:
+    return build(0x00, 0xC0, 0x01)
+
+
+def parse_poll_rate_v2(resp: Response) -> int:
+    return BYTE_TO_POLL_RATE_V2.get(resp.args[1], 0)
 
 
 # --- DPI ------------------------------------------------------------------

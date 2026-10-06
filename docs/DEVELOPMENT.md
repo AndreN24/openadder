@@ -8,10 +8,11 @@
 | `openadder/gui.py` | The window, profiles, and the USB worker thread. |
 | `openadder/actions.py` | What a button can do: the action menu, descriptions, key names. |
 | `openadder/remap.py` | The remap engine: a Windows low-level mouse hook and `SendInput`. |
-| `openadder/device.py` | USB transport (hidapi) and the driver-mode button listener. |
+| `openadder/models.py` | The supported mice and what each one has (LEDs, DPI range, buttons, …). |
+| `openadder/device.py` | USB transport (hidapi), the mouse report, and the driver-mode button listener. |
 | `openadder/protocol.py` | The 90-byte Razer HID reports. |
 | `openadder/config.py` | `%APPDATA%\OpenAdder\config.json` and the autostart entry. |
-| `openadder/mouse_art.py` | The mouse picture as layers on a Tk canvas, plus a tiny PNG writer. |
+| `openadder/mouse_art.py` | The DeathAdder picture as layers on a Tk canvas, plus a tiny PNG writer. |
 | `openadder/tray.py` | Tray icon, tray menu and the emergency shortcut (Windows API through ctypes). |
 | `openadder/theme.py` | The retro look, built on Tk's "clam" theme. |
 | `openadder/dialogs.py` | Name and record-keys dialogs. |
@@ -69,7 +70,7 @@ The mouse takes 90-byte HID feature reports on USB interface 0, through the stan
 | Byte | Meaning |
 |---|---|
 | 0 | status (0x00 new, 0x02 OK, 0x01 busy, 0x03 failure, 0x05 not supported) |
-| 1 | transaction id (0x3F for the DeathAdder V2) |
+| 1 | transaction id (0x3F, 0x1F or 0xFF, depending on the model and sometimes on the command; not part of the CRC) |
 | 5 | number of argument bytes |
 | 6, 7 | command class and id (bit 7 of the id means "read") |
 | 8–87 | arguments |
@@ -84,13 +85,19 @@ but the matching write command (0x0C) is accepted and then ignored. The real wri
 
 ## Adding another Razer mouse
 
-Most Razer mice use the same report format. A new model needs:
+Most Razer mice use the same report format. A new wired model is usually one line in `openadder/models.py`:
 
-1. Its USB product id and transaction id, DPI range, lighting zones and polling-rate command
-   (OpenRazer's `driver/razermouse_driver.c` lists these for about 100 mice).
-2. Its DPI-button codes in driver mode, if it has DPI buttons.
-3. A picture (or a plain list of buttons) for the window.
-4. A test on the real mouse.
+1. Find the mouse in OpenRazer's `driver/razermouse_driver.c` (about 100 mice). Note its USB product id, the
+   transaction id of each command group (settings, lighting, DPI stages), whether it has DPI stages, and which
+   LEDs it has. `daemon/openrazer_daemon/hardware/mouse.py` lists its maximum DPI and lighting effects.
+2. Add a `Model(...)` line. Set `picture=False` if the DeathAdder picture does not fit the mouse: the window then
+   shows only the list of buttons.
+3. Run the tests. Ask an owner to try it and to send the report from **Manage → Copy mouse report**.
+   Set `tested=True` when the owner confirms that it works.
+
+DPI and profile buttons need driver mode (see above). OpenAdder only offers them for models where the codes
+are known (`dpi_up`, `dpi_down`, `profile` in `buttons`). Wireless mice need more work: a receiver, a battery
+level and sleep timing.
 
 ## Ideas that were checked and left out
 
